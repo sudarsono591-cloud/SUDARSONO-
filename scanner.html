@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#111827">
+  <title>Scan Absensi SDN Canggu</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    *{box-sizing:border-box}body{margin:0;background:#f3f4f6;color:#111827;font-family:Arial,Helvetica,sans-serif}
+    .wrap{max-width:620px;margin:0 auto;padding:18px 14px 30px}.card{background:white;border-radius:18px;overflow:hidden;box-shadow:0 10px 32px #11182718}
+    header{background:#111827;color:white;padding:18px;text-align:center}h1{font-size:20px;margin:0 0 6px}header p{font-size:13px;margin:0;color:#d1d5db}
+    .content{padding:16px}.status{padding:12px 14px;border-radius:12px;background:#eef2ff;color:#3730a3;font-size:14px;line-height:1.5;margin-bottom:14px}
+    .status.error{background:#fef2f2;color:#b91c1c}.status.good{background:#ecfdf5;color:#065f46}
+    #reader{width:100%;min-height:260px;border:0;border-radius:12px;overflow:hidden;background:#111827}
+    #reader video{object-fit:cover!important;border-radius:12px}
+    .actions{display:flex;gap:8px;margin-top:12px}.btn{border:0;border-radius:10px;padding:13px 12px;font-weight:700;font-size:14px;cursor:pointer;flex:1}
+    .primary{background:#4f46e5;color:white}.secondary{background:#ede9fe;color:#5b21b6}.neutral{background:#e5e7eb;color:#374151;width:100%;margin-top:8px}
+    .hint{font-size:12px;line-height:1.55;color:#6b7280;text-align:center;margin:12px 4px 0}
+    .result{word-break:break-word;background:#f9fafb;padding:12px;border-radius:10px;margin-top:12px;font-size:13px;display:none}
+    @media(max-width:420px){.actions{flex-direction:column}.btn{width:100%} .wrap{padding:10px}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <div class="card">
+      <header><h1>Scan Absensi</h1><p>SDN Canggu · Pemindaian QR langsung</p></header>
+      <section class="content">
+        <div id="status" class="status">Menyiapkan kamera… Izinkan akses kamera jika diminta.</div>
+        <div id="reader"></div>
+        <div class="actions">
+          <button class="btn primary" onclick="startScanner('environment')">Kamera Belakang / Webcam</button>
+          <button class="btn secondary" onclick="startScanner('user')">Kamera Depan</button>
+        </div>
+        <button class="btn neutral" onclick="window.close()">Tutup Pemindai</button>
+        <div id="result" class="result"></div>
+        <p class="hint">Arahkan kamera ke QR Code siswa. Pemindaian dilakukan langsung, tanpa memotret atau mengunggah gambar. Setelah QR terbaca, hasil dikirim kembali ke aplikasi absensi.</p>
+      </section>
+    </div>
+  </main>
+<script>
+  let scanner = null;
+  let scannerRunning = false;
+  let scanSent = false;
+  let currentMode = new URLSearchParams(location.search).get('mode') || 'environment';
+
+  function setStatus(text, kind='') {
+    const el = document.getElementById('status');
+    el.textContent = text;
+    el.className = 'status' + (kind ? ' ' + kind : '');
+  }
+
+  function chooseCamera(cameras, mode) {
+    const front = /front|user|face|depan|integrated/i;
+    const back = /back|rear|environment|belakang|world/i;
+    if (mode === 'user') {
+      return cameras.find(c => front.test(c.label || '')) || cameras[0];
+    }
+    return cameras.find(c => back.test(c.label || '')) || cameras[cameras.length > 1 ? cameras.length - 1 : 0];
+  }
+
+  async function startScanner(mode='environment') {
+    currentMode = mode;
+    scanSent = false;
+    setStatus('Meminta akses kamera… Pilih Izinkan jika browser menampilkan permintaan izin.');
+    try {
+      if (scanner && scannerRunning) {
+        try { await scanner.stop(); } catch (e) {}
+        scannerRunning = false;
+      }
+      if (scanner) {
+        try { scanner.clear(); } catch (e) {}
+      }
+      scanner = new Html5Qrcode('reader', { verbose: false });
+      const cameras = await Html5Qrcode.getCameras();
+      if (!cameras || !cameras.length) throw new Error('Kamera tidak ditemukan. Pastikan kamera tersedia dan tidak sedang digunakan aplikasi lain.');
+      const chosen = chooseCamera(cameras, mode);
+      if (!chosen) throw new Error('Tidak dapat memilih kamera pada perangkat ini.');
+      const size = Math.max(180, Math.min(280, Math.floor(Math.min(window.innerWidth - 60, window.innerHeight * 0.42))));
+      await scanner.start(
+        chosen.id,
+        { fps: 10, qrbox: { width: size, height: size }, aspectRatio: 1.0, rememberLastUsedCamera: true },
+        decodedText => sendScanResult(decodedText),
+        () => {}
+      );
+      scannerRunning = true;
+      setStatus('Kamera aktif (' + (chosen.label || 'kamera terpilih') + '). Arahkan ke QR Code siswa.', 'good');
+    } catch (error) {
+      scannerRunning = false;
+      const raw = String(error && error.message ? error.message : error);
+      let help = raw;
+      if (/NotAllowedError|Permission denied|PermissionDeniedError/i.test(raw)) {
+        help = 'Akses kamera ditolak. Izinkan Camera/Kamera untuk situs ini di Chrome, tutup aplikasi lain yang memakai kamera, lalu tekan tombol kamera lagi. Jika ini bukan situs HTTPS, buka versi HTTPS.';
+      } else if (/NotFoundError|Requested device not found/i.test(raw)) {
+        help = 'Kamera tidak ditemukan. Periksa webcam/kamera perangkat dan coba tombol kamera lainnya.';
+      } else if (/NotReadableError|Could not start video source/i.test(raw)) {
+        help = 'Kamera sedang digunakan aplikasi lain atau tidak dapat dibuka. Tutup aplikasi lain yang memakai kamera lalu coba lagi.';
+      }
+      setStatus(help, 'error');
+      console.error('Scanner error:', error);
+    }
+  }
+
+  async function sendScanResult(decodedText) {
+    if (scanSent) return;
+    scanSent = true;
+    setStatus('QR terbaca. Mengirim data ke aplikasi absensi…', 'good');
+    const result = document.getElementById('result');
+    result.style.display = 'block';
+    result.textContent = 'QR: ' + decodedText;
+    if (scanner && scannerRunning) {
+      try { await scanner.stop(); } catch (e) {}
+      scannerRunning = false;
+    }
+    if (window.opener && !window.opener.closed) {
+      // Parent memverifikasi event.origin dan event.source sebelum memproses data.
+      window.opener.postMessage({ type: 'ABSENSI_QR_SCANNED', text: String(decodedText) }, '*');
+      setStatus('Berhasil. Pemindai akan ditutup setelah data dikirim.', 'good');
+      setTimeout(() => window.close(), 700);
+    } else {
+      setStatus('QR berhasil dibaca, tetapi halaman ini tidak dibuka dari aplikasi absensi. Tutup halaman ini dan buka Scan Absensi dari aplikasi.', 'error');
+    }
+  }
+
+  window.addEventListener('beforeunload', () => {
+    if (scanner && scannerRunning) scanner.stop().catch(() => {});
+  });
+  startScanner(currentMode);
+</script>
+</body>
+</html>
